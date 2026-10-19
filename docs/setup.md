@@ -36,9 +36,9 @@ macOS では集中モードの作成とショートカットの登録をコマ�
 ## 手順3: 確かめる
 
 ```bash
-~/dev/tools/zoom-quiet/bin/zoom-quiet doctor   # ショートカットが2つとも ✓ になるか
-~/dev/tools/zoom-quiet/bin/zoom-quiet on       # メニューバーに集中モードのアイコンが出るか
-~/dev/tools/zoom-quiet/bin/zoom-quiet off      # アイコンが消えるか
+~/zoom-quiet/bin/zoom-quiet doctor   # ショートカットが2つとも ✓ になるか
+~/zoom-quiet/bin/zoom-quiet on       # メニューバーに集中モードのアイコンが出るか
+~/zoom-quiet/bin/zoom-quiet off      # アイコンが消えるか
 ```
 
 初回の `on` / `off` では「ショートカットが集中モードを変更することを許可しますか」のような確認が出ることがあります。許可してください。

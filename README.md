@@ -1,14 +1,29 @@
 # zoom-quiet
 
-Zoom の会議に入っている間だけ macOS の集中モードを自動で入れ、会議が終わったら切る小さなツールです。
-集中モードで「Claude のアプリの通知だけ消音」にしておけば、**会議中だけ Claude Code（デスクトップアプリ・CLI）の通知が止まります**。
+[![ci](https://github.com/chaenmasahiro0425/zoom-quiet/actions/workflows/ci.yml/badge.svg)](https://github.com/chaenmasahiro0425/zoom-quiet/actions/workflows/ci.yml)
+![tested on macOS 26](https://img.shields.io/badge/tested%20on-macOS%2026-black)
+![License: MIT](https://img.shields.io/badge/License-MIT-blue)
+
+[English](README.en.md) | 日本語
+
+**Zoom の会議中だけ、Claude の通知を止める macOS 用の小さなツールです。**
+
+会議に入ると macOS の集中モードを自動で入れ、退室したら切ります。
+集中モードで「Claude のアプリを消音」にしておけば、会議中だけ Claude Code（デスクトップアプリ・CLI）の通知が止まります。
+画面共有中に通知が映ったり、話の途中で音が鳴ったりしなくなります。
+
+![入室すると集中モードが入り、退室すると戻る](docs/media/demo.gif)
+
+▶ **解説動画（54秒）**: [docs/media/zoom-quiet-explainer.mp4](docs/media/zoom-quiet-explainer.mp4)
 
 - 依存なし（macOS 標準の bash・pgrep・netstat・shortcuts だけ）
-- ログイン時に launchd で自動起動し、5秒ごとに判定
+- ログイン時に launchd で自動起動し、5秒ごとに判定（CPU 使用率はほぼ 0%）
 - 切るのは自分が入れた「Zoom中」だけ。ほかの集中モード（おやすみモードなど）には触らない
 - Claude 以外のアプリ（Slack・ターミナルなど）を一緒に止めるかどうかは、集中モード側で自由に選べる
 
 ## 仕組み
+
+![zoom-quiet の仕組み](docs/media/how-it-works.png)
 
 ```
 launchd ─▶ zoom-quiet run（5秒ごと）
@@ -27,14 +42,14 @@ macOS には集中モードを直接切り替えるコマンドがないので�
 ## インストール
 
 ```bash
-git clone https://github.com/chaenmasahiro0425/zoom-quiet.git ~/dev/tools/zoom-quiet
+git clone https://github.com/chaenmasahiro0425/zoom-quiet.git ~/zoom-quiet
 ```
 
 1. **集中モード「Zoom中」と、ショートカット2つを作る**（初回のみ・約3分）→ [docs/setup.md](docs/setup.md)
 2. 自動起動を有効にする
 
 ```bash
-~/dev/tools/zoom-quiet/bin/zoom-quiet install
+~/zoom-quiet/bin/zoom-quiet install
 ```
 
 最後に `doctor` の結果が全部 ✓ になれば準備完了です。
@@ -54,7 +69,7 @@ zoom-quiet uninstall   # 自動起動をやめる
 `zoom-quiet` を短く打ちたい場合は PATH に通してください。
 
 ```bash
-ln -s ~/dev/tools/zoom-quiet/bin/zoom-quiet /opt/homebrew/bin/zoom-quiet
+ln -s ~/zoom-quiet/bin/zoom-quiet /opt/homebrew/bin/zoom-quiet
 ```
 
 ログは `~/.local/state/zoom-quiet/zoom-quiet.log` に出ます。
@@ -68,7 +83,7 @@ CLI の Claude Code で完了音などを hook で鳴らしている場合は、
   "hooks": {
     "Stop": [
       { "hooks": [ { "type": "command",
-        "command": "~/dev/tools/zoom-quiet/bin/zoom-quiet check -q || afplay /System/Library/Sounds/Glass.aiff",
+        "command": "~/zoom-quiet/bin/zoom-quiet check -q || afplay /System/Library/Sounds/Glass.aiff",
         "async": true } ] }
     ]
   }
@@ -98,18 +113,26 @@ CLI の Claude Code で完了音などを hook で鳴らしている場合は、
 - 集中モードの「デバイス間で共有」がオンだと、iPhone なども一緒に集中モードになります。Mac だけにしたい場合はオフにしてください
 - `CptHost` は Zoom の画面共有にも使われるため、会議の外で画面共有の機能だけを使ったときも集中モードが入る可能性があります（未確認）
 - 判定方法は Zoom の内部プロセス名に頼っているため、Zoom の更新で変わる可能性があります。動かなくなったら `zoom-quiet status` で確かめてください
-
 - macOS の集中モードの状態は外から読めないため、「Zoom中」を会議前に手で入れていた場合も、退室時に切れます
 - 設定ファイルはシェルとして読み込みます。自分だけが書ける場所（既定の `~/.config/zoom-quiet/`）に置いてください
 
 ## アンインストール
 
 ```bash
-~/dev/tools/zoom-quiet/bin/zoom-quiet uninstall
+~/zoom-quiet/bin/zoom-quiet uninstall
 ```
 
 集中モードとショートカットは手で削除してください。
 
+## 動作確認した環境
+
+- macOS 26.6（Apple Silicon）
+- Zoom Workplace（2026年10月時点の版）
+
+ほかの環境で動いた・動かなかったという報告は Issue で歓迎します。
+
 ## ライセンス
 
-MIT
+[MIT](LICENSE)
+
+Zoom は Zoom Video Communications, Inc.、Claude は Anthropic の商標です。このツールはどちらの企業とも関係のない非公式のツールです。
