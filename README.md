@@ -14,7 +14,7 @@
 
 ![入室すると集中モードが入り、退室すると戻る](docs/media/demo.gif)
 
-▶ **解説動画（54秒）**: [docs/media/zoom-quiet-explainer.mp4](docs/media/zoom-quiet-explainer.mp4)
+▶ **解説動画（54秒）をブラウザで見る**: https://chaenmasahiro0425.github.io/zoom-quiet/
 
 - 依存なし（macOS 標準の bash・pgrep・netstat・shortcuts だけ）
 - ログイン時に launchd で自動起動し、5秒ごとに判定（CPU 使用率はほぼ 0%）

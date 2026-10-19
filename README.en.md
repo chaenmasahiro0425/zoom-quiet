@@ -13,7 +13,7 @@ Set that Focus to silence the Claude apps, and Claude Code notifications (deskto
 
 ![Joining turns the Focus on, leaving turns it off](docs/media/demo.gif)
 
-▶ **Explainer video (54 s, Japanese captions)**: [docs/media/zoom-quiet-explainer.mp4](docs/media/zoom-quiet-explainer.mp4)
+▶ **Watch the explainer video (54 s, Japanese captions)**: https://chaenmasahiro0425.github.io/zoom-quiet/
 
 - No dependencies (only macOS built-ins: bash, pgrep, netstat, shortcuts)
 - Starts at login via launchd and checks every 5 seconds (practically 0% CPU)
