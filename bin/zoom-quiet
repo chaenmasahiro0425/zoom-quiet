@@ -176,7 +176,8 @@ cmd_status() {
 cmd_doctor() {
   local ok=0
   echo "zoom-quiet v$VERSION ($(t "日本語" "English"))"
-  echo "Config: $CONFIG_FILE $([ -f "$CONFIG_FILE" ] && t '(あり)' '(found)' || t '(なし・既定値で動作)' '(not found, using defaults)')"
+  local cf; if [ -f "$CONFIG_FILE" ]; then cf="$(t '(あり)' '(found)')"; else cf="$(t '(なし・既定値で動作)' '(not found, using defaults)')"; fi
+  echo "Config: $CONFIG_FILE $cf"
   if [ -d /Applications/zoom.us.app ]; then echo "✓ $(t "Zoom がインストールされています" "Zoom is installed")"
   else echo "✗ $(t "/Applications/zoom.us.app が見つかりません" "/Applications/zoom.us.app not found")"; ok=1; fi
   if [ -n "$ON_CMD" ] && [ -n "$OFF_CMD" ]; then
@@ -225,7 +226,7 @@ cmd_install() {
   wait_unloaded || { rm -f "$tmp"; t "既存の自動起動を止められませんでした" "could not stop the existing agent" >&2; echo >&2; return 1; }
   mv "$tmp" "$PLIST"
   launchctl bootstrap "gui/$(id -u)" "$PLIST" && echo "$(t "自動起動を有効にしました" "autostart enabled") (${PLIST})"
-  echo "$(t "※リポジトリを移動したら、もう一度 install してください" "Note: if you move this folder, run install again")"
+  t "※リポジトリを移動したら、もう一度 install してください" "Note: if you move this folder, run install again"; echo
   echo
   cmd_doctor
 }
