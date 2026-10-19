@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zoom-quiet — Zoom会議中だけClaudeの通知を止める</title>
+<meta name="description" content="Zoomの会議中だけmacOSの集中モードを入れて、Claude Codeの通知を止める小さなオープンソースツール。">
+<style>
+  :root { --ink:#111827; --sub:#4b5563; --line:#e5e7eb; --soft:#f3f4f6; --blue:#2D8CFF; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#fff; color:var(--ink); font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; line-height:1.7; }
+  main { max-width: 960px; margin: 0 auto; padding: 48px 16px 80px; }
+  h1 { font-size: clamp(36px, 7vw, 64px); margin: 0; letter-spacing: .5px; }
+  .lead { font-size: clamp(18px, 3vw, 24px); font-weight: 700; margin: 8px 0 24px; }
+  video, img { width: 100%; height: auto; border-radius: 16px; border: 1px solid var(--line); display:block; }
+  h2 { font-size: 28px; margin: 48px 0 12px; }
+  pre { background: var(--soft); border-radius: 12px; padding: 16px; overflow-x: auto; font-size: 15px; }
+  ol li { margin: 6px 0; }
+  .btn { display:inline-block; background:var(--ink); color:#fff; text-decoration:none; font-weight:700; padding:12px 24px; border-radius:999px; margin: 8px 8px 0 0; }
+  .btn.alt { background: var(--soft); color: var(--ink); }
+  footer { margin-top: 56px; color: var(--sub); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>zoom-quiet</h1>
+  <p class="lead">Zoomの会議中だけClaudeの通知を止める（macOS向け・オープンソース）</p>
+
+  <video src="media/zoom-quiet-explainer.mp4" poster="media/how-it-works.png" controls playsinline preload="metadata"></video>
+  <p>
+    <a class="btn" href="https://github.com/chaenmasahiro0425/zoom-quiet">GitHubで見る</a>
+    <a class="btn alt" href="https://github.com/chaenmasahiro0425/zoom-quiet/blob/main/README.en.md">English</a>
+  </p>
+
+  <h2>仕組み</h2>
+  <img src="media/how-it-works.png" alt="Zoomの会議に入るとzoom-quietが気づき、集中モード「Zoom中」を入れてClaudeの通知を消音する。退室すると約10秒で元に戻す">
+
+  <h2>準備は3ステップ（約3分）</h2>
+  <ol>
+    <li>集中モード「Zoom中」を作り、Claudeのアプリを消音に設定する</li>
+    <li>ショートカット「Zoom中オン」「Zoom中オフ」を作る（手順は <a href="https://github.com/chaenmasahiro0425/zoom-quiet/blob/main/docs/setup.md">docs/setup.md</a>）</li>
+    <li>次のコマンドで自動起動を有効にする</li>
+  </ol>
+  <pre><code>git clone https://github.com/chaenmasahiro0425/zoom-quiet.git ~/zoom-quiet
+~/zoom-quiet/bin/zoom-quiet install</code></pre>
+
+  <footer>
+    MIT License。Zoom は Zoom Video Communications, Inc.、Claude は Anthropic の商標です。このツールはどちらの企業とも関係のない非公式のツールです。
+  </footer>
+</main>
+</body>
+</html>
