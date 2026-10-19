@@ -12,11 +12,14 @@ set -u
 
 VERSION="0.1.0"
 LABEL="com.github.zoom-quiet"
-SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+# symlink から呼ばれても、リポジトリ内の実体を基準にする
+SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/zoom-quiet"
 CONFIG_FILE="$CONFIG_DIR/config"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/zoom-quiet"
-ACTIVE_FLAG="$STATE_DIR/active"   # zoom-quiet が集中モードを入れている間だけ存在する
+ACTIVE_FLAG="$STATE_DIR/active"   # zoom-quiet が集中モードを入れている（入れようとした）間だけ存在する
+LOCK_DIR="$STATE_DIR/run.lock"
 LOG_FILE="$STATE_DIR/zoom-quiet.log"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
@@ -25,15 +28,24 @@ INTERVAL=5                    # 何秒ごとに会議中かを見るか
 LEAVE_CHECKS=2                # 会議が終わったと何回続けて判定したら切るか（ちらつき防止）
 ON_SHORTCUT="Zoom中オン"       # 集中モードを入れるショートカット名
 OFF_SHORTCUT="Zoom中オフ"      # 集中モードを切るショートカット名
-ON_CMD=""                     # ショートカットの代わりに実行するコマンド（任意）
+ON_CMD=""                     # ショートカットの代わりに実行するコマンド（両方書いたときだけ有効）
 OFF_CMD=""
+ACTION_TIMEOUT=20             # オン／オフの操作がこの秒数で終わらなければ打ち切る
 UDP_MIN=1                     # Zoom本体の UDP 通信がこの本数以上なら会議中とみなす（0 で無効）
 TEST_FLAG=""                  # このファイルがあれば会議中とみなす（テスト用）
 
+# config は本人だけが書ける場所に置く前提で、そのままシェルとして読み込む
 [ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
 mkdir -p "$STATE_DIR"
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG_FILE"; }
+
+# 数値でない・小さすぎる設定値は既定値に戻す（ゼロ除算や、オフにならない設定を防ぐ）
+posint() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; [ "$1" -ge "$2" ]; }
+posint "$INTERVAL" 1 || { log "INTERVAL=$INTERVAL は使えないので 5 にします"; INTERVAL=5; }
+posint "$LEAVE_CHECKS" 1 || { log "LEAVE_CHECKS=$LEAVE_CHECKS は使えないので 2 にします"; LEAVE_CHECKS=2; }
+posint "$UDP_MIN" 0 || UDP_MIN=1
+posint "$ACTION_TIMEOUT" 1 || ACTION_TIMEOUT=20
 
 # ---- 会議中かの判定 ----
 # 会議に入ると Zoom は CptHost / aomhost を起動し、本体が UDP で音声・映像を流す。
@@ -57,34 +69,55 @@ detect() {
 }
 
 # ---- 集中モードの操作 ----
+with_timeout() { # 固まった操作で監視ごと止まらないよう、ACTION_TIMEOUT 秒で打ち切る
+  "$@" >>"$LOG_FILE" 2>&1 &
+  local pid=$! waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$ACTION_TIMEOUT" ]; then
+      pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; log "操作が ${ACTION_TIMEOUT} 秒で終わらないので打ち切りました"; return 124
+    fi
+    sleep 1; waited=$((waited + 1))
+  done
+  wait "$pid"
+}
+
 run_action() { # $1=on|off
-  local cmd shortcut
-  if [ "$1" = on ]; then cmd="$ON_CMD"; shortcut="$ON_SHORTCUT"; else cmd="$OFF_CMD"; shortcut="$OFF_SHORTCUT"; fi
-  if [ -n "$cmd" ]; then
-    /bin/bash -c "$cmd" >>"$LOG_FILE" 2>&1
+  if [ -n "$ON_CMD" ] && [ -n "$OFF_CMD" ]; then
+    if [ "$1" = on ]; then with_timeout /bin/bash -c "$ON_CMD"; else with_timeout /bin/bash -c "$OFF_CMD"; fi
   else
-    /usr/bin/shortcuts run "$shortcut" >>"$LOG_FILE" 2>&1
+    if [ "$1" = on ]; then with_timeout /usr/bin/shortcuts run "$ON_SHORTCUT"; else with_timeout /usr/bin/shortcuts run "$OFF_SHORTCUT"; fi
   fi
 }
 
 quiet_on() {
-  if run_action on; then : >"$ACTIVE_FLAG"; log "ON  (${REASON:-manual})"; return 0; fi
+  # 先に印を付けてから入れる。入れた後に記録できずに終わると、誰も切らなくなるため
+  if ! : >"$ACTIVE_FLAG"; then log "状態ファイルを書けないので入れません: $ACTIVE_FLAG"; return 1; fi
+  if run_action on; then log "ON  (${REASON:-manual})"; return 0; fi
+  rm -f "$ACTIVE_FLAG"
   log "ON に失敗。ショートカット「$ON_SHORTCUT」があるか zoom-quiet doctor で確認してください"
   return 1
 }
 
 quiet_off() {
   if run_action off; then rm -f "$ACTIVE_FLAG"; log "OFF"; return 0; fi
-  log "OFF に失敗。ショートカット「$OFF_SHORTCUT」があるか zoom-quiet doctor で確認してください"
+  log "OFF に失敗（次の判定で再挑戦します）。ショートカット「$OFF_SHORTCUT」があるか zoom-quiet doctor で確認してください"
   return 1
 }
 
 # ---- 監視ループ ----
+acquire_lock() { # 監視は1つだけ。持ち主が死んでいれば引き継ぐ
+  if mkdir "$LOCK_DIR" 2>/dev/null; then echo $$ >"$LOCK_DIR/pid"; return 0; fi
+  local owner; owner="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
+  if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then return 1; fi
+  echo $$ >"$LOCK_DIR/pid"; return 0
+}
+
 cmd_run() {
+  if ! acquire_lock; then echo "すでに監視中です（pid $(cat "$LOCK_DIR/pid")）" >&2; exit 1; fi
   log "start v$VERSION (interval=${INTERVAL}s)"
   # 自分が入れたまま止まっていたら、会議の外なら切って元に戻す
   if [ -e "$ACTIVE_FLAG" ] && ! detect; then quiet_off; fi
-  trap 'log "stop"; [ -e "$ACTIVE_FLAG" ] && quiet_off; exit 0' TERM INT HUP
+  trap 'log "stop"; [ -e "$ACTIVE_FLAG" ] && quiet_off; rm -f "$LOCK_DIR/pid"; rmdir "$LOCK_DIR" 2>/dev/null; exit 0' TERM INT HUP
 
   local misses=0 retry=0
   while :; do
@@ -92,12 +125,12 @@ cmd_run() {
       misses=0
       # 入れ損ねたら 30 秒ほど空けて再挑戦（ログを埋めない）
       if [ ! -e "$ACTIVE_FLAG" ] && [ "$retry" -le 0 ]; then
-        quiet_on || retry=$(( 30 / INTERVAL ))
+        quiet_on || retry=$(( (30 + INTERVAL - 1) / INTERVAL ))
       fi
       [ "$retry" -gt 0 ] && retry=$((retry - 1))
     elif [ -e "$ACTIVE_FLAG" ]; then
       misses=$((misses + 1))
-      if [ "$misses" -ge "$LEAVE_CHECKS" ]; then quiet_off; misses=0; fi
+      if [ "$misses" -ge "$LEAVE_CHECKS" ]; then quiet_off && misses=0; fi
     fi
     sleep "$INTERVAL" &
     wait $!
@@ -125,6 +158,7 @@ cmd_doctor() {
   if [ -n "$ON_CMD" ] && [ -n "$OFF_CMD" ]; then
     echo "✓ ON_CMD / OFF_CMD を使います（ショートカットは不要）"
   else
+    [ -n "$ON_CMD$OFF_CMD" ] && echo "! ON_CMD / OFF_CMD は片方だけなので無視し、ショートカットを使います"
     local list; list="$(/usr/bin/shortcuts list 2>/dev/null)"
     for s in "$ON_SHORTCUT" "$OFF_SHORTCUT"; do
       if printf '%s\n' "$list" | grep -Fxq "$s"; then echo "✓ ショートカット「$s」があります"
@@ -135,20 +169,35 @@ cmd_doctor() {
   return $ok
 }
 
+wait_unloaded() { # bootout は非同期なので、外れきるまで待つ（待たないと bootstrap が error 5 で失敗する）
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || return 0
+    sleep 0.5
+  done
+  return 1
+}
+
 cmd_install() {
   mkdir -p "$HOME/Library/LaunchAgents" "$CONFIG_DIR"
   if [ ! -f "$CONFIG_FILE" ]; then
-    cp "$(dirname "$SELF")/../config.example" "$CONFIG_FILE" 2>/dev/null && echo "設定ファイルを作りました: $CONFIG_FILE"
+    cp "$ROOT/config.example" "$CONFIG_FILE" && echo "設定ファイルを作りました: $CONFIG_FILE"
   fi
-  sed -e "s#__SELF__#$SELF#g" -e "s#__LOG__#$LOG_FILE#g" -e "s#__LABEL__#$LABEL#g" \
-    "$(dirname "$SELF")/../launchd/zoom-quiet.plist.template" >"$PLIST"
-  # bootout は非同期なので、外れきるまで待ってから入れ直す（待たないと bootstrap が error 5 で失敗する）
+  # plist は一時ファイルで組み立てて検証し、通ってから差し替える（パスは plutil で入れるのでエスケープ不要）
+  local tmp; tmp="$(mktemp -t zoom-quiet)" || return 1
+  cp "$ROOT/launchd/zoom-quiet.plist.template" "$tmp" &&
+  plutil -replace Label -string "$LABEL" "$tmp" &&
+  plutil -remove ProgramArguments.1 "$tmp" && plutil -insert ProgramArguments.1 -string "$SELF" "$tmp" &&
+  plutil -replace StandardOutPath -string "$LOG_FILE" "$tmp" &&
+  plutil -replace StandardErrorPath -string "$LOG_FILE" "$tmp" || { rm -f "$tmp"; echo "plist を作れませんでした" >&2; return 1; }
+  # シェルで XDG を変えていたら、launchd 側にも同じ場所を渡す
+  [ -n "${XDG_CONFIG_HOME:-}" ] && plutil -replace EnvironmentVariables.XDG_CONFIG_HOME -string "$XDG_CONFIG_HOME" "$tmp"
+  [ -n "${XDG_STATE_HOME:-}" ] && plutil -replace EnvironmentVariables.XDG_STATE_HOME -string "$XDG_STATE_HOME" "$tmp"
+  plutil -lint -s "$tmp" || { rm -f "$tmp"; echo "plist の検証に失敗しました" >&2; return 1; }
+
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
-  local i
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || break
-    sleep 0.5
-  done
+  wait_unloaded || { rm -f "$tmp"; echo "既存の自動起動を止められませんでした" >&2; return 1; }
+  mv "$tmp" "$PLIST"
   launchctl bootstrap "gui/$(id -u)" "$PLIST" && echo "自動起動を有効にしました（$PLIST）"
   echo
   cmd_doctor
@@ -156,7 +205,10 @@ cmd_install() {
 
 cmd_uninstall() {
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null   # 止めると TERM で集中モードも切れる
+  wait_unloaded || echo "自動起動の停止を確認できませんでした" >&2
   rm -f "$PLIST"
+  # 監視が切れなかった・すでに止まっていた場合も、自分が入れた集中モードは切っておく
+  if [ -e "$ACTIVE_FLAG" ]; then quiet_off || echo "集中モード「Zoom中」を手で切ってください" >&2; fi
   echo "自動起動を外しました。設定とログは残しています: $CONFIG_DIR / $STATE_DIR"
 }
 
