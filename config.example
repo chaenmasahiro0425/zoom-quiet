@@ -1,0 +1,19 @@
+# zoom-quiet の設定（~/.config/zoom-quiet/config）
+# 書き換えたら反映のために: launchctl kickstart -k gui/$(id -u)/com.github.zoom-quiet
+
+# 何秒ごとに会議中かを見るか
+INTERVAL=5
+
+# 会議が終わったと何回続けて判定したら集中モードを切るか
+LEAVE_CHECKS=2
+
+# 集中モードを入れる／切るショートカットの名前（docs/setup.md で作るもの）
+ON_SHORTCUT="Zoom中オン"
+OFF_SHORTCUT="Zoom中オフ"
+
+# ショートカットの代わりに任意のコマンドを使う場合（両方書いたときだけ有効）
+# ON_CMD='say "会議が始まりました"'
+# OFF_CMD='say "会議が終わりました"'
+
+# Zoom本体の UDP 通信がこの本数以上なら会議中とみなす（0 で無効）
+UDP_MIN=1

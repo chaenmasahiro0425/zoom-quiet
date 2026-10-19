@@ -1,0 +1,174 @@
+#!/bin/bash
+# zoom-quiet: Zoom の会議中だけ macOS の集中モードを入れて、Claude の通知を止める
+#
+#   zoom-quiet run         会議の監視を続ける（launchd から呼ばれる本体）
+#   zoom-quiet check [-q]  いま会議中か（会議中なら終了コード 0）
+#   zoom-quiet status      判定の内訳と、集中モードを入れているかを表示
+#   zoom-quiet on | off    集中モードを手で入れる／切る（動作確認用）
+#   zoom-quiet doctor      設定とショートカットの有無を点検
+#   zoom-quiet install | uninstall   ログイン時に自動で動かす／やめる
+
+set -u
+
+VERSION="0.1.0"
+LABEL="com.github.zoom-quiet"
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/zoom-quiet"
+CONFIG_FILE="$CONFIG_DIR/config"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/zoom-quiet"
+ACTIVE_FLAG="$STATE_DIR/active"   # zoom-quiet が集中モードを入れている間だけ存在する
+LOG_FILE="$STATE_DIR/zoom-quiet.log"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+
+# ---- 既定値（config で上書きできる） ----
+INTERVAL=5                    # 何秒ごとに会議中かを見るか
+LEAVE_CHECKS=2                # 会議が終わったと何回続けて判定したら切るか（ちらつき防止）
+ON_SHORTCUT="Zoom中オン"       # 集中モードを入れるショートカット名
+OFF_SHORTCUT="Zoom中オフ"      # 集中モードを切るショートカット名
+ON_CMD=""                     # ショートカットの代わりに実行するコマンド（任意）
+OFF_CMD=""
+UDP_MIN=1                     # Zoom本体の UDP 通信がこの本数以上なら会議中とみなす（0 で無効）
+TEST_FLAG=""                  # このファイルがあれば会議中とみなす（テスト用）
+
+[ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
+mkdir -p "$STATE_DIR"
+
+log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG_FILE"; }
+
+# ---- 会議中かの判定 ----
+# 会議に入ると Zoom は CptHost / aomhost を起動し、本体が UDP で音声・映像を流す。
+# 会議の外ではどちらも出ない（macOS 26 / Zoom 6 系で実測）。
+detect() {
+  REASON=""
+  if [ -n "$TEST_FLAG" ] && [ -e "$TEST_FLAG" ]; then REASON="test-flag"; return 0; fi
+  local helper
+  helper="$(pgrep -lx 'CptHost|aomhost' | awk '{print $2; exit}')"
+  if [ -n "$helper" ]; then REASON="$helper"; return 0; fi
+  if [ "$UDP_MIN" -gt 0 ]; then
+    local pid n
+    pid="$(pgrep -x zoom.us | head -1)"
+    if [ -n "$pid" ]; then
+      # lsof は1回1秒以上かかるので、プロセス名:pid の列が出る netstat -v で数える
+      n="$(netstat -anv -p udp 2>/dev/null | grep -c " zoom\.us:$pid ")"
+      if [ "${n:-0}" -ge "$UDP_MIN" ]; then REASON="udp:$n"; return 0; fi
+    fi
+  fi
+  return 1
+}
+
+# ---- 集中モードの操作 ----
+run_action() { # $1=on|off
+  local cmd shortcut
+  if [ "$1" = on ]; then cmd="$ON_CMD"; shortcut="$ON_SHORTCUT"; else cmd="$OFF_CMD"; shortcut="$OFF_SHORTCUT"; fi
+  if [ -n "$cmd" ]; then
+    /bin/bash -c "$cmd" >>"$LOG_FILE" 2>&1
+  else
+    /usr/bin/shortcuts run "$shortcut" >>"$LOG_FILE" 2>&1
+  fi
+}
+
+quiet_on() {
+  if run_action on; then : >"$ACTIVE_FLAG"; log "ON  (${REASON:-manual})"; return 0; fi
+  log "ON に失敗。ショートカット「$ON_SHORTCUT」があるか zoom-quiet doctor で確認してください"
+  return 1
+}
+
+quiet_off() {
+  if run_action off; then rm -f "$ACTIVE_FLAG"; log "OFF"; return 0; fi
+  log "OFF に失敗。ショートカット「$OFF_SHORTCUT」があるか zoom-quiet doctor で確認してください"
+  return 1
+}
+
+# ---- 監視ループ ----
+cmd_run() {
+  log "start v$VERSION (interval=${INTERVAL}s)"
+  # 自分が入れたまま止まっていたら、会議の外なら切って元に戻す
+  if [ -e "$ACTIVE_FLAG" ] && ! detect; then quiet_off; fi
+  trap 'log "stop"; [ -e "$ACTIVE_FLAG" ] && quiet_off; exit 0' TERM INT HUP
+
+  local misses=0 retry=0
+  while :; do
+    if detect; then
+      misses=0
+      # 入れ損ねたら 30 秒ほど空けて再挑戦（ログを埋めない）
+      if [ ! -e "$ACTIVE_FLAG" ] && [ "$retry" -le 0 ]; then
+        quiet_on || retry=$(( 30 / INTERVAL ))
+      fi
+      [ "$retry" -gt 0 ] && retry=$((retry - 1))
+    elif [ -e "$ACTIVE_FLAG" ]; then
+      misses=$((misses + 1))
+      if [ "$misses" -ge "$LEAVE_CHECKS" ]; then quiet_off; misses=0; fi
+    fi
+    sleep "$INTERVAL" &
+    wait $!
+  done
+}
+
+cmd_check() {
+  if detect; then [ "${1:-}" = -q ] || echo "in-meeting ($REASON)"; return 0; fi
+  [ "${1:-}" = -q ] || echo "not-in-meeting"
+  return 1
+}
+
+cmd_status() {
+  if detect; then echo "Zoom      : 会議中（$REASON）"; else echo "Zoom      : 会議の外"; fi
+  if [ -e "$ACTIVE_FLAG" ]; then echo "集中モード: zoom-quiet が入れています"; else echo "集中モード: zoom-quiet は入れていません"; fi
+  if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then echo "自動起動  : 有効"; else echo "自動起動  : 無効（zoom-quiet install で有効化）"; fi
+  echo "ログ      : $LOG_FILE"
+}
+
+cmd_doctor() {
+  local ok=0
+  echo "zoom-quiet v$VERSION"
+  echo "設定ファイル: $CONFIG_FILE $([ -f "$CONFIG_FILE" ] && echo '(あり)' || echo '(なし・既定値で動作)')"
+  [ -d /Applications/zoom.us.app ] && echo "✓ Zoom がインストールされています" || { echo "✗ /Applications/zoom.us.app が見つかりません"; ok=1; }
+  if [ -n "$ON_CMD" ] && [ -n "$OFF_CMD" ]; then
+    echo "✓ ON_CMD / OFF_CMD を使います（ショートカットは不要）"
+  else
+    local list; list="$(/usr/bin/shortcuts list 2>/dev/null)"
+    for s in "$ON_SHORTCUT" "$OFF_SHORTCUT"; do
+      if printf '%s\n' "$list" | grep -Fxq "$s"; then echo "✓ ショートカット「$s」があります"
+      else echo "✗ ショートカット「$s」がありません（docs/setup.md の手順2）"; ok=1; fi
+    done
+  fi
+  if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then echo "✓ 自動起動が有効です"; else echo "- 自動起動は無効です（zoom-quiet install）"; fi
+  return $ok
+}
+
+cmd_install() {
+  mkdir -p "$HOME/Library/LaunchAgents" "$CONFIG_DIR"
+  if [ ! -f "$CONFIG_FILE" ]; then
+    cp "$(dirname "$SELF")/../config.example" "$CONFIG_FILE" 2>/dev/null && echo "設定ファイルを作りました: $CONFIG_FILE"
+  fi
+  sed -e "s#__SELF__#$SELF#g" -e "s#__LOG__#$LOG_FILE#g" -e "s#__LABEL__#$LABEL#g" \
+    "$(dirname "$SELF")/../launchd/zoom-quiet.plist.template" >"$PLIST"
+  # bootout は非同期なので、外れきるまで待ってから入れ直す（待たないと bootstrap が error 5 で失敗する）
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
+  launchctl bootstrap "gui/$(id -u)" "$PLIST" && echo "自動起動を有効にしました（$PLIST）"
+  echo
+  cmd_doctor
+}
+
+cmd_uninstall() {
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null   # 止めると TERM で集中モードも切れる
+  rm -f "$PLIST"
+  echo "自動起動を外しました。設定とログは残しています: $CONFIG_DIR / $STATE_DIR"
+}
+
+case "${1:-}" in
+  run) cmd_run ;;
+  check) shift; cmd_check "$@" ;;
+  status) cmd_status ;;
+  on) REASON=manual; quiet_on ;;
+  off) quiet_off ;;
+  doctor) cmd_doctor ;;
+  install) cmd_install ;;
+  uninstall) cmd_uninstall ;;
+  -v|--version) echo "$VERSION" ;;
+  *) sed -n '2,10p' "$SELF" | sed 's/^# \{0,1\}//'; [ -n "${1:-}" ] && exit 2 ;;
+esac
