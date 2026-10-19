@@ -1,56 +1,70 @@
 #!/bin/bash
-# zoom-quiet: Zoom の会議中だけ macOS の集中モードを入れて、Claude の通知を止める
+# zoom-quiet: turn on a macOS Focus only while you are in a Zoom meeting,
+# so Claude (or any app you choose) stays quiet during meetings.
+# Zoom の会議中だけ macOS の集中モードを入れて、Claude の通知を止める。
 #
-#   zoom-quiet run         会議の監視を続ける（launchd から呼ばれる本体）
-#   zoom-quiet check [-q]  いま会議中か（会議中なら終了コード 0）
-#   zoom-quiet status      判定の内訳と、集中モードを入れているかを表示
-#   zoom-quiet on | off    集中モードを手で入れる／切る（動作確認用）
-#   zoom-quiet doctor      設定とショートカットの有無を点検
-#   zoom-quiet install | uninstall   ログイン時に自動で動かす／やめる
+# Run `zoom-quiet help` for usage. Messages follow your macOS language (ja/en).
 
 set -u
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 LABEL="com.github.zoom-quiet"
-# symlink から呼ばれても、リポジトリ内の実体を基準にする
+# Resolve symlinks so install works from e.g. /opt/homebrew/bin/zoom-quiet
 SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/zoom-quiet"
 CONFIG_FILE="$CONFIG_DIR/config"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/zoom-quiet"
-ACTIVE_FLAG="$STATE_DIR/active"   # zoom-quiet が集中モードを入れている（入れようとした）間だけ存在する
+ACTIVE_FLAG="$STATE_DIR/active"   # exists only while zoom-quiet has (or may have) turned the Focus on
 LOCK_DIR="$STATE_DIR/run.lock"
 LOG_FILE="$STATE_DIR/zoom-quiet.log"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
-# ---- 既定値（config で上書きできる） ----
-INTERVAL=5                    # 何秒ごとに会議中かを見るか
-LEAVE_CHECKS=2                # 会議が終わったと何回続けて判定したら切るか（ちらつき防止）
-ON_SHORTCUT="Zoom中オン"       # 集中モードを入れるショートカット名
-OFF_SHORTCUT="Zoom中オフ"      # 集中モードを切るショートカット名
-ON_CMD=""                     # ショートカットの代わりに実行するコマンド（両方書いたときだけ有効）
+# ---- defaults (override in the config file) ----
+INTERVAL=5          # seconds between checks
+LEAVE_CHECKS=2      # consecutive "not in a meeting" checks before turning the Focus off
+ON_SHORTCUT=""      # Shortcut that turns the Focus on  (default depends on language)
+OFF_SHORTCUT=""     # Shortcut that turns the Focus off (default depends on language)
+ON_CMD=""           # command to run instead of the Shortcut (used only when both are set)
 OFF_CMD=""
-ACTION_TIMEOUT=20             # オン／オフの操作がこの秒数で終わらなければ打ち切る
-UDP_MIN=1                     # Zoom本体の UDP 通信がこの本数以上なら会議中とみなす（0 で無効）
-TEST_FLAG=""                  # このファイルがあれば会議中とみなす（テスト用）
+ACTION_TIMEOUT=20   # abort an on/off action after this many seconds
+UDP_MIN=1           # in a meeting when zoom.us has at least this many UDP sockets (0 disables)
+UI_LANG=auto        # auto | ja | en
+TEST_FLAG=""        # if this file exists, treat as "in a meeting" (for tests)
 
-# config は本人だけが書ける場所に置く前提で、そのままシェルとして読み込む
+# The config is sourced as shell: keep it writable only by you.
 # shellcheck source=/dev/null
 [ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
 mkdir -p "$STATE_DIR"
 
+# ---- language ----
+detect_lang() {
+  case "$UI_LANG" in ja|en) echo "$UI_LANG"; return ;; esac
+  local l="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+  # launchd starts us without LANG, so fall back to the macOS preferred language
+  [ -z "$l" ] && l="$(defaults read -g AppleLanguages 2>/dev/null | sed -n '2p' | tr -d ' ",')"
+  case "$l" in ja*) echo ja ;; *) echo en ;; esac
+}
+L="$(detect_lang)"
+t() { if [ "$L" = ja ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }   # t "日本語" "English"
+
+if [ "$L" = ja ]; then FOCUS_NAME="Zoom中"; else FOCUS_NAME="Zoom Quiet"; fi
+[ -n "$ON_SHORTCUT" ]  || ON_SHORTCUT="$(t 'Zoom中オン' 'Zoom Quiet On')"
+[ -n "$OFF_SHORTCUT" ] || OFF_SHORTCUT="$(t 'Zoom中オフ' 'Zoom Quiet Off')"
+SETUP_DOC="$(t 'docs/setup.md' 'docs/setup.en.md')"
+
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG_FILE"; }
 
-# 数値でない・小さすぎる設定値は既定値に戻す（ゼロ除算や、オフにならない設定を防ぐ）
+# Fall back to defaults for non-numeric or too-small values (avoids division by zero / never turning off)
 posint() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; [ "$1" -ge "$2" ]; }
-posint "$INTERVAL" 1 || { log "INTERVAL=$INTERVAL は使えないので 5 にします"; INTERVAL=5; }
-posint "$LEAVE_CHECKS" 1 || { log "LEAVE_CHECKS=$LEAVE_CHECKS は使えないので 2 にします"; LEAVE_CHECKS=2; }
+posint "$INTERVAL" 1 || { log "$(t "INTERVAL=$INTERVAL は使えないので 5 にします" "invalid INTERVAL=$INTERVAL, using 5")"; INTERVAL=5; }
+posint "$LEAVE_CHECKS" 1 || { log "$(t "LEAVE_CHECKS=$LEAVE_CHECKS は使えないので 2 にします" "invalid LEAVE_CHECKS=$LEAVE_CHECKS, using 2")"; LEAVE_CHECKS=2; }
 posint "$UDP_MIN" 0 || UDP_MIN=1
 posint "$ACTION_TIMEOUT" 1 || ACTION_TIMEOUT=20
 
-# ---- 会議中かの判定 ----
-# 会議に入ると Zoom は CptHost / aomhost を起動し、本体が UDP で音声・映像を流す。
-# 会議の外ではどちらも出ない（macOS 26 / Zoom 6 系で実測）。
+# ---- meeting detection ----
+# In a meeting Zoom spawns CptHost / aomhost and streams over UDP.
+# None of these appear outside a meeting (measured on macOS 26).
 detect() {
   REASON=""
   if [ -n "$TEST_FLAG" ] && [ -e "$TEST_FLAG" ]; then REASON="test-flag"; return 0; fi
@@ -61,7 +75,7 @@ detect() {
     local pid n
     pid="$(pgrep -x zoom.us | head -1)"
     if [ -n "$pid" ]; then
-      # lsof は1回1秒以上かかるので、プロセス名:pid の列が出る netstat -v で数える
+      # lsof takes >1 s per call; netstat -v prints "process:pid" and is ~0.1 s
       n="$(netstat -anv -p udp 2>/dev/null | grep -c " zoom\.us:$pid ")"
       if [ "${n:-0}" -ge "$UDP_MIN" ]; then REASON="udp:$n"; return 0; fi
     fi
@@ -69,13 +83,15 @@ detect() {
   return 1
 }
 
-# ---- 集中モードの操作 ----
-with_timeout() { # 固まった操作で監視ごと止まらないよう、ACTION_TIMEOUT 秒で打ち切る
+# ---- Focus on/off ----
+with_timeout() { # don't let a stuck action freeze the watcher
   "$@" >>"$LOG_FILE" 2>&1 &
   local pid=$! waited=0
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$waited" -ge "$ACTION_TIMEOUT" ]; then
-      pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; log "操作が ${ACTION_TIMEOUT} 秒で終わらないので打ち切りました"; return 124
+      pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null
+      log "$(t "操作が ${ACTION_TIMEOUT} 秒で終わらないので打ち切りました" "action did not finish in ${ACTION_TIMEOUT}s, aborted")"
+      return 124
     fi
     sleep 1; waited=$((waited + 1))
   done
@@ -91,36 +107,36 @@ run_action() { # $1=on|off
 }
 
 quiet_on() {
-  # 先に印を付けてから入れる。入れた後に記録できずに終わると、誰も切らなくなるため
-  if ! : >"$ACTIVE_FLAG"; then log "状態ファイルを書けないので入れません: $ACTIVE_FLAG"; return 1; fi
+  # Mark first, then act: if we died after turning it on but before marking, nobody would turn it off
+  if ! : >"$ACTIVE_FLAG"; then log "$(t "状態ファイルを書けないので入れません: $ACTIVE_FLAG" "cannot write state file, not turning on: $ACTIVE_FLAG")"; return 1; fi
   run_action on; local rc=$?
   if [ "$rc" -eq 0 ]; then log "ON  (${REASON:-manual})"; return 0; fi
-  # 打ち切った場合は入ったかどうか分からないので、印を残して退室時に切らせる
-  if [ "$rc" -eq 124 ]; then log "ON が終わらないまま打ち切りました。退室時に OFF を試みます"; return 0; fi
+  # Aborted: we don't know whether it turned on, so keep the mark and try OFF on leave
+  if [ "$rc" -eq 124 ]; then log "$(t "ON が終わらないまま打ち切りました。退室時に OFF を試みます" "ON was aborted; will try OFF when you leave")"; return 0; fi
   rm -f "$ACTIVE_FLAG"
-  log "ON に失敗。ショートカット「${ON_SHORTCUT}」があるか zoom-quiet doctor で確認してください"
+  log "$(t "ON に失敗。ショートカット「${ON_SHORTCUT}」があるか zoom-quiet doctor で確認してください" "ON failed. Run zoom-quiet doctor to check the Shortcut \"${ON_SHORTCUT}\"")"
   return 1
 }
 
 quiet_off() {
   if run_action off; then rm -f "$ACTIVE_FLAG"; log "OFF"; return 0; fi
-  log "OFF に失敗（30秒ほどあとに再挑戦します）。ショートカット「${OFF_SHORTCUT}」があるか zoom-quiet doctor で確認してください"
+  log "$(t "OFF に失敗（30秒ほどあとに再挑戦します）。ショートカット「${OFF_SHORTCUT}」があるか zoom-quiet doctor で確認してください" "OFF failed (retrying in ~30s). Run zoom-quiet doctor to check the Shortcut \"${OFF_SHORTCUT}\"")"
   return 1
 }
 
-# ---- 監視ループ ----
-acquire_lock() { # 監視は1つだけ。持ち主が死んでいれば引き継ぐ
+# ---- watcher ----
+acquire_lock() { # only one watcher; take over if the owner is gone
   if mkdir "$LOCK_DIR" 2>/dev/null; then echo $$ >"$LOCK_DIR/pid"; return 0; fi
   local owner; owner="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
-  # PID が別のプロセスに再利用されていることがあるので、コマンド名まで確かめる
+  # PIDs get reused, so check the command line too
   if [ -n "$owner" ] && ps -p "$owner" -o command= 2>/dev/null | grep -q 'zoom-quiet run'; then return 1; fi
   echo $$ >"$LOCK_DIR/pid"; return 0
 }
 
 cmd_run() {
-  if ! acquire_lock; then echo "すでに監視中です（pid $(cat "$LOCK_DIR/pid")）" >&2; exit 1; fi
-  log "start v$VERSION (interval=${INTERVAL}s)"
-  # 自分が入れたまま止まっていたら、会議の外なら切って元に戻す
+  if ! acquire_lock; then echo "$(t "すでに監視中です" "already running") (pid $(cat "$LOCK_DIR/pid"))" >&2; exit 1; fi
+  log "start v$VERSION (interval=${INTERVAL}s, lang=$L)"
+  # If we left the Focus on last time and we're not in a meeting now, restore it
   if [ -e "$ACTIVE_FLAG" ] && ! detect; then quiet_off; fi
   trap 'log "stop"; [ -e "$ACTIVE_FLAG" ] && quiet_off; rm -f "$LOCK_DIR/pid"; rmdir "$LOCK_DIR" 2>/dev/null; exit 0' TERM INT HUP
 
@@ -128,7 +144,7 @@ cmd_run() {
   while :; do
     if detect; then
       misses=0
-      # 入れ損ねたら 30 秒ほど空けて再挑戦（ログを埋めない）
+      # on failure, wait ~30s before retrying (keeps the log short)
       if [ ! -e "$ACTIVE_FLAG" ] && [ "$retry" -le 0 ]; then
         quiet_on || retry=$(( (30 + INTERVAL - 1) / INTERVAL ))
       fi
@@ -136,7 +152,6 @@ cmd_run() {
     elif [ -e "$ACTIVE_FLAG" ]; then
       misses=$((misses + 1))
       if [ "$misses" -ge "$LEAVE_CHECKS" ]; then
-        # 失敗したら 30 秒ほど空けて再挑戦（ログを埋めない）
         if quiet_off; then misses=0; else misses=$(( LEAVE_CHECKS - (30 + INTERVAL - 1) / INTERVAL )); fi
       fi
     fi
@@ -152,33 +167,34 @@ cmd_check() {
 }
 
 cmd_status() {
-  if detect; then echo "Zoom      : 会議中（${REASON}）"; else echo "Zoom      : 会議の外"; fi
-  if [ -e "$ACTIVE_FLAG" ]; then echo "集中モード: zoom-quiet が入れています"; else echo "集中モード: zoom-quiet は入れていません"; fi
-  if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then echo "自動起動  : 有効"; else echo "自動起動  : 無効（zoom-quiet install で有効化）"; fi
-  echo "ログ      : $LOG_FILE"
+  if detect; then echo "Zoom      : $(t "会議中（${REASON}）" "in a meeting (${REASON})")"; else echo "Zoom      : $(t "会議の外" "not in a meeting")"; fi
+  if [ -e "$ACTIVE_FLAG" ]; then echo "Focus     : $(t "zoom-quiet が入れています" "on (turned on by zoom-quiet)")"; else echo "Focus     : $(t "zoom-quiet は入れていません" "not turned on by zoom-quiet")"; fi
+  if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then echo "Autostart : $(t "有効" "enabled")"; else echo "Autostart : $(t "無効（zoom-quiet install で有効化）" "disabled (run zoom-quiet install)")"; fi
+  echo "Log       : $LOG_FILE"
 }
 
 cmd_doctor() {
   local ok=0
-  echo "zoom-quiet v$VERSION"
-  echo "設定ファイル: $CONFIG_FILE $([ -f "$CONFIG_FILE" ] && echo '(あり)' || echo '(なし・既定値で動作)')"
-  if [ -d /Applications/zoom.us.app ]; then echo "✓ Zoom がインストールされています"
-  else echo "✗ /Applications/zoom.us.app が見つかりません"; ok=1; fi
+  echo "zoom-quiet v$VERSION ($(t "日本語" "English"))"
+  local cf; if [ -f "$CONFIG_FILE" ]; then cf="$(t '(あり)' '(found)')"; else cf="$(t '(なし・既定値で動作)' '(not found, using defaults)')"; fi
+  echo "Config: $CONFIG_FILE $cf"
+  if [ -d /Applications/zoom.us.app ]; then echo "✓ $(t "Zoom がインストールされています" "Zoom is installed")"
+  else echo "✗ $(t "/Applications/zoom.us.app が見つかりません" "/Applications/zoom.us.app not found")"; ok=1; fi
   if [ -n "$ON_CMD" ] && [ -n "$OFF_CMD" ]; then
-    echo "✓ ON_CMD / OFF_CMD を使います（ショートカットは不要）"
+    echo "✓ $(t "ON_CMD / OFF_CMD を使います（ショートカットは不要）" "using ON_CMD / OFF_CMD (no Shortcuts needed)")"
   else
-    [ -n "$ON_CMD$OFF_CMD" ] && echo "! ON_CMD / OFF_CMD は片方だけなので無視し、ショートカットを使います"
-    local list; list="$(/usr/bin/shortcuts list 2>/dev/null)"
+    [ -n "$ON_CMD$OFF_CMD" ] && echo "! $(t "ON_CMD / OFF_CMD は片方だけなので無視し、ショートカットを使います" "only one of ON_CMD / OFF_CMD is set; ignoring it and using Shortcuts")"
+    local list s; list="$(/usr/bin/shortcuts list 2>/dev/null)"
     for s in "$ON_SHORTCUT" "$OFF_SHORTCUT"; do
-      if printf '%s\n' "$list" | grep -Fxq "$s"; then echo "✓ ショートカット「${s}」があります"
-      else echo "✗ ショートカット「${s}」がありません（docs/setup.md の手順2）"; ok=1; fi
+      if printf '%s\n' "$list" | grep -Fxq "$s"; then echo "✓ $(t "ショートカット「${s}」があります" "Shortcut \"${s}\" found")"
+      else echo "✗ $(t "ショートカット「${s}」がありません（${SETUP_DOC} の手順2）" "Shortcut \"${s}\" not found (see ${SETUP_DOC}, step 2)")"; ok=1; fi
     done
   fi
-  if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then echo "✓ 自動起動が有効です"; else echo "- 自動起動は無効です（zoom-quiet install）"; fi
+  if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then echo "✓ $(t "自動起動が有効です" "autostart is enabled")"; else echo "- $(t "自動起動は無効です（zoom-quiet install）" "autostart is disabled (zoom-quiet install)")"; fi
   return $ok
 }
 
-wait_unloaded() { # bootout は非同期なので、外れきるまで待つ（待たないと bootstrap が error 5 で失敗する）
+wait_unloaded() { # bootout is async; bootstrap fails with error 5 if we don't wait
   local _
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || return 0
@@ -190,37 +206,62 @@ wait_unloaded() { # bootout は非同期なので、外れきるまで待つ（�
 cmd_install() {
   mkdir -p "$HOME/Library/LaunchAgents" "$CONFIG_DIR"
   if [ ! -f "$CONFIG_FILE" ]; then
-    cp "$ROOT/config.example" "$CONFIG_FILE" && echo "設定ファイルを作りました: $CONFIG_FILE"
+    cp "$ROOT/config.example" "$CONFIG_FILE" && echo "$(t "設定ファイルを作りました" "created config"): $CONFIG_FILE"
   fi
-  # plist は一時ファイルで組み立てて検証し、通ってから差し替える（パスは plutil で入れるのでエスケープ不要）
+  # Build the plist in a temp file, validate it, then swap it in (plutil handles escaping)
   local tmp; tmp="$(mktemp -t zoom-quiet)" || return 1
   if ! { cp "$ROOT/launchd/zoom-quiet.plist.template" "$tmp" &&
          plutil -replace Label -string "$LABEL" "$tmp" &&
          plutil -remove ProgramArguments.1 "$tmp" && plutil -insert ProgramArguments.1 -string "$SELF" "$tmp" &&
          plutil -replace StandardOutPath -string "$LOG_FILE" "$tmp" &&
          plutil -replace StandardErrorPath -string "$LOG_FILE" "$tmp"; }; then
-    rm -f "$tmp"; echo "plist を作れませんでした" >&2; return 1
+    rm -f "$tmp"; t "plist を作れませんでした" "could not build the plist" >&2; echo >&2; return 1
   fi
-  # シェルで XDG を変えていたら、launchd 側にも同じ場所を渡す
+  # Pass custom XDG dirs on to launchd
   [ -n "${XDG_CONFIG_HOME:-}" ] && plutil -replace EnvironmentVariables.XDG_CONFIG_HOME -string "$XDG_CONFIG_HOME" "$tmp"
   [ -n "${XDG_STATE_HOME:-}" ] && plutil -replace EnvironmentVariables.XDG_STATE_HOME -string "$XDG_STATE_HOME" "$tmp"
-  plutil -lint -s "$tmp" || { rm -f "$tmp"; echo "plist の検証に失敗しました" >&2; return 1; }
+  plutil -lint -s "$tmp" || { rm -f "$tmp"; t "plist の検証に失敗しました" "plist validation failed" >&2; echo >&2; return 1; }
 
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
-  wait_unloaded || { rm -f "$tmp"; echo "既存の自動起動を止められませんでした" >&2; return 1; }
+  wait_unloaded || { rm -f "$tmp"; t "既存の自動起動を止められませんでした" "could not stop the existing agent" >&2; echo >&2; return 1; }
   mv "$tmp" "$PLIST"
-  launchctl bootstrap "gui/$(id -u)" "$PLIST" && echo "自動起動を有効にしました（${PLIST}）"
+  launchctl bootstrap "gui/$(id -u)" "$PLIST" && echo "$(t "自動起動を有効にしました" "autostart enabled") (${PLIST})"
+  t "※リポジトリを移動したら、もう一度 install してください" "Note: if you move this folder, run install again"; echo
   echo
   cmd_doctor
 }
 
 cmd_uninstall() {
-  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null   # 止めると TERM で集中モードも切れる
-  wait_unloaded || echo "自動起動の停止を確認できませんでした" >&2
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null   # TERM makes the watcher turn the Focus off
+  wait_unloaded || { t "自動起動の停止を確認できませんでした" "could not confirm the agent stopped" >&2; echo >&2; }
   rm -f "$PLIST"
-  # 監視が切れなかった・すでに止まっていた場合も、自分が入れた集中モードは切っておく
-  if [ -e "$ACTIVE_FLAG" ]; then quiet_off || echo "集中モード「Zoom中」を手で切ってください" >&2; fi
-  echo "自動起動を外しました。設定とログは残しています: $CONFIG_DIR / $STATE_DIR"
+  # If the watcher didn't (or was already stopped), turn off the Focus we turned on
+  if [ -e "$ACTIVE_FLAG" ]; then quiet_off || { t "集中モード「${FOCUS_NAME}」を手で切ってください" "please turn off the \"${FOCUS_NAME}\" Focus by hand" >&2; echo >&2; }; fi
+  echo "$(t "自動起動を外しました。設定とログは残しています" "autostart removed. Config and logs are kept"): $CONFIG_DIR / $STATE_DIR"
+}
+
+cmd_help() {
+  if [ "$L" = ja ]; then cat <<'EOF'
+zoom-quiet: Zoom の会議中だけ macOS の集中モードを入れて、Claude の通知を止める
+
+  zoom-quiet run         会議の監視を続ける（launchd から呼ばれる本体）
+  zoom-quiet check [-q]  いま会議中か（会議中なら終了コード 0）
+  zoom-quiet status      判定の内訳と、集中モードを入れているかを表示
+  zoom-quiet on | off    集中モードを手で入れる／切る（動作確認用）
+  zoom-quiet doctor      設定とショートカットの有無を点検
+  zoom-quiet install | uninstall   ログイン時に自動で動かす／やめる
+EOF
+  else cat <<'EOF'
+zoom-quiet: turn on a macOS Focus only while you are in a Zoom meeting
+
+  zoom-quiet run         watch for meetings (what launchd runs)
+  zoom-quiet check [-q]  exit 0 while in a meeting
+  zoom-quiet status      show detection and whether the Focus is on
+  zoom-quiet on | off    turn the Focus on / off by hand (for testing)
+  zoom-quiet doctor      check your setup and Shortcuts
+  zoom-quiet install | uninstall   start / stop running at login
+EOF
+  fi
 }
 
 case "${1:-}" in
@@ -233,5 +274,6 @@ case "${1:-}" in
   install) cmd_install ;;
   uninstall) cmd_uninstall ;;
   -v|--version) echo "$VERSION" ;;
-  *) sed -n '2,10p' "$SELF" | sed 's/^# \{0,1\}//'; [ -n "${1:-}" ] && exit 2 ;;
+  help|-h|--help|"") cmd_help ;;
+  *) cmd_help; exit 2 ;;
 esac

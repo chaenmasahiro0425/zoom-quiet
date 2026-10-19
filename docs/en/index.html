@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zoom-quiet — silence Claude only during Zoom meetings</title>
+<meta name="description" content="A tiny open-source macOS tool that turns on a Focus only while you are in a Zoom meeting, so Claude Code notifications stay quiet.">
+<style>
+  :root { --ink:#111827; --sub:#4b5563; --line:#e5e7eb; --soft:#f3f4f6; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#fff; color:var(--ink); font-family: -apple-system, "Segoe UI", sans-serif; line-height:1.7; }
+  main { max-width: 960px; margin: 0 auto; padding: 48px 16px 80px; }
+  h1 { font-size: clamp(36px, 7vw, 64px); margin: 0; letter-spacing: .5px; }
+  .lead { font-size: clamp(18px, 3vw, 24px); font-weight: 700; margin: 8px 0 24px; }
+  video, img { width: 100%; height: auto; border-radius: 16px; border: 1px solid var(--line); display:block; }
+  h2 { font-size: 28px; margin: 48px 0 12px; }
+  pre { background: var(--soft); border-radius: 12px; padding: 16px; overflow-x: auto; font-size: 15px; }
+  ol li { margin: 6px 0; }
+  .btn { display:inline-block; background:var(--ink); color:#fff; text-decoration:none; font-weight:700; padding:12px 24px; border-radius:999px; margin: 8px 8px 0 0; }
+  .btn.alt { background: var(--soft); color: var(--ink); }
+  footer { margin-top: 56px; color: var(--sub); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>zoom-quiet</h1>
+  <p class="lead">Silence Claude notifications only while you are in a Zoom meeting (macOS, open source)</p>
+
+  <video src="../media/zoom-quiet-intro-en.mp4" poster="../media/how-it-works-en.png" controls playsinline preload="metadata"></video>
+  <p>
+    <a class="btn" href="https://github.com/chaenmasahiro0425/zoom-quiet/blob/main/README.en.md">View on GitHub</a>
+    <a class="btn alt" href="../">日本語</a>
+  </p>
+
+  <h2>How it works</h2>
+  <img src="../media/how-it-works-en.png" alt="When you join a Zoom meeting, zoom-quiet notices and turns on a Focus that silences Claude. About 10 seconds after you leave, it turns the Focus off again.">
+
+  <h2>Setup in 3 steps (about 3 minutes)</h2>
+  <ol>
+    <li>Create a Focus named “Zoom Quiet” that silences the Claude app(s)</li>
+    <li>Create two Shortcuts, “Zoom Quiet On” and “Zoom Quiet Off” (see <a href="https://github.com/chaenmasahiro0425/zoom-quiet/blob/main/docs/setup.en.md">docs/setup.en.md</a>)</li>
+    <li>Enable autostart:</li>
+  </ol>
+  <pre><code>git clone https://github.com/chaenmasahiro0425/zoom-quiet.git ~/zoom-quiet
+~/zoom-quiet/bin/zoom-quiet install</code></pre>
+
+  <footer>
+    MIT License. Zoom is a trademark of Zoom Video Communications, Inc. Claude is a trademark of Anthropic. This is an unofficial tool not affiliated with either company.
+  </footer>
+</main>
+</body>
+</html>

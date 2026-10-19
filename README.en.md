@@ -1,7 +1,7 @@
 # zoom-quiet
 
 [![ci](https://github.com/chaenmasahiro0425/zoom-quiet/actions/workflows/ci.yml/badge.svg)](https://github.com/chaenmasahiro0425/zoom-quiet/actions/workflows/ci.yml)
-![tested on macOS 26](https://img.shields.io/badge/tested%20on-macOS%2026-black)
+![macOS](https://img.shields.io/badge/platform-macOS-black)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue)
 
 English | [日本語](README.md)
@@ -11,9 +11,9 @@ English | [日本語](README.md)
 When you join a meeting, zoom-quiet turns on a macOS Focus; when you leave, it turns it off again.
 Set that Focus to silence the Claude apps, and Claude Code notifications (desktop app and CLI) stay quiet during meetings only — no banners in your screen share, no sounds while you talk.
 
-![Joining turns the Focus on, leaving turns it off](docs/media/demo.gif)
+![Joining turns the Focus on, leaving turns it off](docs/media/demo-en.gif)
 
-▶ **Watch the explainer video (54 s, Japanese captions)**: https://chaenmasahiro0425.github.io/zoom-quiet/
+▶ **Watch the 30-second intro video**: https://chaenmasahiro0425.github.io/zoom-quiet/en/
 
 - No dependencies (only macOS built-ins: bash, pgrep, netstat, shortcuts)
 - Starts at login via launchd and checks every 5 seconds (practically 0% CPU)
@@ -22,15 +22,15 @@ Set that Focus to silence the Claude apps, and Claude Code notifications (deskto
 
 ## How it works
 
-![How zoom-quiet works](docs/media/how-it-works.png)
+![How zoom-quiet works](docs/media/how-it-works-en.png)
 
 ```
 launchd ─▶ zoom-quiet run (every 5 s)
               │
               ├─ In a meeting?  CptHost / aomhost is running, or zoom.us has UDP sockets
               │
-              ├─ Joined  → shortcuts run "Zoom中オン"  → Focus "Zoom中" on
-              └─ Left    → shortcuts run "Zoom中オフ"  → Focus "Zoom中" off
+              ├─ Joined  → shortcuts run "Zoom Quiet On"   → Focus "Zoom Quiet" on
+              └─ Left    → shortcuts run "Zoom Quiet Off"  → Focus "Zoom Quiet" off
 ```
 
 When you join a meeting, Zoom spawns the helper processes `CptHost` and `aomhost` and starts streaming audio/video over UDP.
@@ -44,11 +44,12 @@ macOS has no command to toggle a Focus directly, so zoom-quiet runs two Shortcut
 git clone https://github.com/chaenmasahiro0425/zoom-quiet.git ~/zoom-quiet
 ```
 
-1. Create a Focus and two Shortcuts (one time, ~3 minutes):
-   - **Focus**: System Settings → Focus → Add Focus → Custom. Name it `Zoom中`, choose **Silence notifications from** and add the Claude app(s) — and your terminal if you want CLI banners silenced too.
-   - **Shortcut `Zoom中オン`**: one action, *Set Focus* → `Zoom中` → **On** (until turned off).
-   - **Shortcut `Zoom中オフ`**: one action, *Set Focus* → `Zoom中` → **Off**.
+1. Create a Focus and two Shortcuts (one time, ~3 minutes) — step by step in [docs/setup.en.md](docs/setup.en.md):
+   - **Focus** `Zoom Quiet`: System Settings → Focus → Add Focus → Custom. Choose **Silence notifications from** and add the Claude app(s) — and your terminal if you want CLI banners silenced too.
+   - **Shortcut `Zoom Quiet On`**: one action, *Set Focus* → `Zoom Quiet` → **On** (until turned off).
+   - **Shortcut `Zoom Quiet Off`**: one action, *Set Focus* → `Zoom Quiet` → **Off**.
    - Prefer other names? Set `ON_SHORTCUT` / `OFF_SHORTCUT` in the config (see below).
+   - Messages and default names follow your macOS language (English or Japanese). Force one with `UI_LANG=en`.
 2. Enable autostart:
 
 ```bash
@@ -95,7 +96,8 @@ If a Claude Code hook plays a sound, skip it during meetings (`~/.claude/setting
 |---|---|---|
 | `INTERVAL` | `5` | Seconds between checks |
 | `LEAVE_CHECKS` | `2` | Consecutive "not in a meeting" checks before turning the Focus off |
-| `ON_SHORTCUT` / `OFF_SHORTCUT` | `Zoom中オン` / `Zoom中オフ` | Shortcut names to run |
+| `UI_LANG` | `auto` | Message language: `auto` (follows macOS), `en`, `ja` |
+| `ON_SHORTCUT` / `OFF_SHORTCUT` | `Zoom Quiet On` / `Zoom Quiet Off` (Japanese macOS: `Zoom中オン` / `Zoom中オフ`) | Shortcut names to run |
 | `ON_CMD` / `OFF_CMD` | empty | Commands to run instead of Shortcuts (used only when both are set) |
 | `ACTION_TIMEOUT` | `20` | Seconds before an on/off action is aborted |
 | `UDP_MIN` | `1` | Treat Zoom as in a meeting when it has at least this many UDP sockets (`0` disables) |
@@ -107,7 +109,9 @@ Apply changes with `launchctl kickstart -k gui/$(id -u)/com.github.zoom-quiet`.
 - A notification may slip through in the first few seconds after joining (check interval).
 - If the Focus has *Share across devices* on, your iPhone will follow. Turn it off to keep it Mac-only.
 - Detection relies on Zoom's internal process names, which a Zoom update could change. `zoom-quiet status` shows what is detected.
-- macOS does not expose Focus state, so if you turned `Zoom中` on by hand before a meeting, it will still be turned off when you leave.
+- macOS does not expose Focus state, so if you turned `Zoom Quiet` on by hand before a meeting, it will still be turned off when you leave.
+- `install` records the script's path in the launch agent. If you move the folder, run `install` again.
+- Tested by the author on macOS 26.6 (Apple Silicon) with a real Zoom meeting for detection. Reports from other setups are welcome in Issues.
 
 ## Uninstall
 
@@ -116,6 +120,11 @@ Apply changes with `launchctl kickstart -k gui/$(id -u)/com.github.zoom-quiet`.
 ```
 
 Delete the Focus and the two Shortcuts by hand.
+
+## Videos
+
+- 30-second intro (English): https://chaenmasahiro0425.github.io/zoom-quiet/en/
+- 54-second explainer (Japanese captions): https://chaenmasahiro0425.github.io/zoom-quiet/
 
 ## License
 

@@ -1,7 +1,7 @@
 # zoom-quiet
 
 [![ci](https://github.com/chaenmasahiro0425/zoom-quiet/actions/workflows/ci.yml/badge.svg)](https://github.com/chaenmasahiro0425/zoom-quiet/actions/workflows/ci.yml)
-![tested on macOS 26](https://img.shields.io/badge/tested%20on-macOS%2026-black)
+![macOS](https://img.shields.io/badge/platform-macOS-black)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue)
 
 [English](README.en.md) | 日本語
@@ -14,7 +14,7 @@
 
 ![入室すると集中モードが入り、退室すると戻る](docs/media/demo.gif)
 
-▶ **解説動画（54秒）をブラウザで見る**: https://chaenmasahiro0425.github.io/zoom-quiet/
+▶ **紹介動画（30秒）と解説動画（54秒）をブラウザで見る**: https://chaenmasahiro0425.github.io/zoom-quiet/
 
 - 依存なし（macOS 標準の bash・pgrep・netstat・shortcuts だけ）
 - ログイン時に launchd で自動起動し、5秒ごとに判定（CPU 使用率はほぼ 0%）
@@ -100,7 +100,8 @@ CLI の Claude Code で完了音などを hook で鳴らしている場合は、
 |---|---|---|
 | `INTERVAL` | `5` | 何秒ごとに判定するか |
 | `LEAVE_CHECKS` | `2` | 会議の外と何回続けて判定したら切るか |
-| `ON_SHORTCUT` / `OFF_SHORTCUT` | `Zoom中オン` / `Zoom中オフ` | 実行するショートカットの名前 |
+| `UI_LANG` | `auto` | メッセージの言語。`auto` は macOS の言語設定に合わせる（`ja` / `en` で固定） |
+| `ON_SHORTCUT` / `OFF_SHORTCUT` | `Zoom中オン` / `Zoom中オフ`（英語環境では `Zoom Quiet On` / `Zoom Quiet Off`） | 実行するショートカットの名前 |
 | `ON_CMD` / `OFF_CMD` | なし | ショートカットの代わりに実行するコマンド（両方書いたときだけ有効） |
 | `ACTION_TIMEOUT` | `20` | オン／オフの操作を打ち切る秒数 |
 | `UDP_MIN` | `1` | Zoom本体のUDP通信がこの本数以上なら会議中（`0` で無効） |
@@ -114,6 +115,7 @@ CLI の Claude Code で完了音などを hook で鳴らしている場合は、
 - `CptHost` は Zoom の画面共有にも使われるため、会議の外で画面共有の機能だけを使ったときも集中モードが入る可能性があります（未確認）
 - 判定方法は Zoom の内部プロセス名に頼っているため、Zoom の更新で変わる可能性があります。動かなくなったら `zoom-quiet status` で確かめてください
 - macOS の集中モードの状態は外から読めないため、「Zoom中」を会議前に手で入れていた場合も、退室時に切れます
+- `install` はスクリプトの場所を自動起動の設定に書き込みます。フォルダを移動したら、もう一度 `install` してください
 - 設定ファイルはシェルとして読み込みます。自分だけが書ける場所（既定の `~/.config/zoom-quiet/`）に置いてください
 
 ## アンインストール
@@ -126,8 +128,8 @@ CLI の Claude Code で完了音などを hook で鳴らしている場合は、
 
 ## 動作確認した環境
 
-- macOS 26.6（Apple Silicon）
-- Zoom Workplace（2026年10月時点の版）
+- 会議中の判定: macOS 26.6（Apple Silicon）と Zoom Workplace（2026年10月時点の版）で、実際の会議に入って確認
+- 常駐・オン／オフの切り替えの流れ: テスト用の仕組みで確認（CI でも macOS 上で毎回確認）
 
 ほかの環境で動いた・動かなかったという報告は Issue で歓迎します。
 
