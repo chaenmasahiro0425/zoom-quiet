@@ -97,13 +97,13 @@ quiet_on() {
   # 打ち切った場合は入ったかどうか分からないので、印を残して退室時に切らせる
   if [ "$rc" -eq 124 ]; then log "ON が終わらないまま打ち切りました。退室時に OFF を試みます"; return 0; fi
   rm -f "$ACTIVE_FLAG"
-  log "ON に失敗。ショートカット「$ON_SHORTCUT」があるか zoom-quiet doctor で確認してください"
+  log "ON に失敗。ショートカット「${ON_SHORTCUT}」があるか zoom-quiet doctor で確認してください"
   return 1
 }
 
 quiet_off() {
   if run_action off; then rm -f "$ACTIVE_FLAG"; log "OFF"; return 0; fi
-  log "OFF に失敗（30秒ほどあとに再挑戦します）。ショートカット「$OFF_SHORTCUT」があるか zoom-quiet doctor で確認してください"
+  log "OFF に失敗（30秒ほどあとに再挑戦します）。ショートカット「${OFF_SHORTCUT}」があるか zoom-quiet doctor で確認してください"
   return 1
 }
 
@@ -151,7 +151,7 @@ cmd_check() {
 }
 
 cmd_status() {
-  if detect; then echo "Zoom      : 会議中（$REASON）"; else echo "Zoom      : 会議の外"; fi
+  if detect; then echo "Zoom      : 会議中（${REASON}）"; else echo "Zoom      : 会議の外"; fi
   if [ -e "$ACTIVE_FLAG" ]; then echo "集中モード: zoom-quiet が入れています"; else echo "集中モード: zoom-quiet は入れていません"; fi
   if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then echo "自動起動  : 有効"; else echo "自動起動  : 無効（zoom-quiet install で有効化）"; fi
   echo "ログ      : $LOG_FILE"
@@ -168,8 +168,8 @@ cmd_doctor() {
     [ -n "$ON_CMD$OFF_CMD" ] && echo "! ON_CMD / OFF_CMD は片方だけなので無視し、ショートカットを使います"
     local list; list="$(/usr/bin/shortcuts list 2>/dev/null)"
     for s in "$ON_SHORTCUT" "$OFF_SHORTCUT"; do
-      if printf '%s\n' "$list" | grep -Fxq "$s"; then echo "✓ ショートカット「$s」があります"
-      else echo "✗ ショートカット「$s」がありません（docs/setup.md の手順2）"; ok=1; fi
+      if printf '%s\n' "$list" | grep -Fxq "$s"; then echo "✓ ショートカット「${s}」があります"
+      else echo "✗ ショートカット「${s}」がありません（docs/setup.md の手順2）"; ok=1; fi
     done
   fi
   if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then echo "✓ 自動起動が有効です"; else echo "- 自動起動は無効です（zoom-quiet install）"; fi
@@ -205,7 +205,7 @@ cmd_install() {
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
   wait_unloaded || { rm -f "$tmp"; echo "既存の自動起動を止められませんでした" >&2; return 1; }
   mv "$tmp" "$PLIST"
-  launchctl bootstrap "gui/$(id -u)" "$PLIST" && echo "自動起動を有効にしました（$PLIST）"
+  launchctl bootstrap "gui/$(id -u)" "$PLIST" && echo "自動起動を有効にしました（${PLIST}）"
   echo
   cmd_doctor
 }
